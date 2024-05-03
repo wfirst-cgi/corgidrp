@@ -118,10 +118,10 @@ def flat_division(input_dataset, master_flat):
 
     return None
 
-def correct_bad_pixels(input_dataset):
+def correct_bad_pixels(input_dataset, bp_map):
     """
     
-    Compute bad pixel map and correct for bad pixels. 
+    Correct for bad pixels and pixels affected by CR. 
 
     MMB Notes: 
         - We'll likely want to be able to accept an external bad pixel map, either 
@@ -132,13 +132,70 @@ def correct_bad_pixels(input_dataset):
         not want to correct everything in the DQ extension
         - Different bad pixels in the DQ may be corrected differently.
 
+    Args:
+        input_dataset (corgidrp.data.Dataset): a dataset of Images (L2a-level)
+        bp_map (corgidrp.data.BadPixelMap): Bad-pixel map flagging all bad pixels
+            in that frame. Must be 0 (good) or 1 (bad) at every pixel.
+            NOTE: class TBW: 
+
+    Returns:
+        corgidrp.data.Dataset: a version of the input dataset with bad pixels
+        and cosmic rays corrected
+ 
+    """
+
+    data = input_dataset.copy()
+    data_cube = data.all_data
+
+    for i in range(data_cube.shape[0]):
+        # Load CR map
+        cr_map = 
+        # Combine CR and BP maps
+        bp_cr_mask = np.logical_or(cr_map, bp_map).astype(int)
+        # Update DQ mask for the frame (Bad pixel=3rd bit, CR=8th bit. Bad pixel
+        # and CR=00100001=132
+        update_dq
+        # remove bad pixels
+        #Q: Can one apply np.ma to data directly (corgidrp class)?
+        data_cube[i] = np.ma.masked_array(data_cube[i], bp_cr_mask)
+        #Q: Is this operation supported with corgidrp data class?
+        data_cube[i] = data_cube[i].filled(0)
+
+    history_msg = "removed bad pixels from cosmic rays and bad pixels"
+    data.update_after_processing_step(history_msg, new_all_data=data_cube)
+
+    return data
+
+def desmear(input_dataset):
+    """
+
+    Desmear data frames.
 
     Args:
         input_dataset (corgidrp.data.Dataset): a dataset of Images (L2a-level)
 
     Returns:
-        corgidrp.data.Dataset: a version of the input dataset with bad pixels corrected
+        corgidrp.data.Dataset: a version of the input dataset with desmear applied
+
     """
 
-    return None
+    data = input_dataset.copy()
+    data_cube = data.all_data
 
+    for i in range(data_cube.shape[0]):
+        exptime = float(datacube[i].ext_hdr['EXPTIME'])
+        rowreadtime = TBD
+        smear = np.zeros_like(data_cube[i])
+        m = len(smear)
+        for r in range(m):
+            columnsum = 0
+            for s in range(r+1):
+                columnsum = columnsum + rowreadtime/exptime*((1 
+                + rowreadtime/exptime)**((s+1)-(s+1)-1))*data_cube[i,s,:]
+            smear[r,:] = columnsum
+        data_cube[i] -= smear
+   
+    history_msg = "removed bad pixels from cosmic rays and bad pixels"
+    data.update_after_processing_step(history_msg, new_all_data=data_cube)
+
+    return data
