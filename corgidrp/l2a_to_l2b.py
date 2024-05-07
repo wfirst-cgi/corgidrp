@@ -136,7 +136,7 @@ def correct_bad_pixels(input_dataset, bp_map):
         input_dataset (corgidrp.data.Dataset): a dataset of Images (L2a-level)
         bp_map (corgidrp.data.BadPixelMap): Bad-pixel map flagging all bad pixels
             in that frame. Must be 0 (good) or 1 (bad) at every pixel.
-            NOTE: class TBW: 
+            NOTE: class. Draft written in badpixels branch. Reviewer: Kevin Ludwick.
 
     Returns:
         corgidrp.data.Dataset: a version of the input dataset with bad pixels
@@ -153,7 +153,7 @@ def correct_bad_pixels(input_dataset, bp_map):
         # Combine CR and BP maps
         bp_cr_mask = np.logical_or(cr_map, bp_map).astype(int)
         # Update DQ mask for the frame (Bad pixel=3rd bit, CR=8th bit. Bad pixel
-        # and CR=00100001=132
+        # and CR=00100001=132)
         update_dq
         # remove bad pixels
         #Q: Can one apply np.ma to data directly (corgidrp class)?
@@ -161,7 +161,7 @@ def correct_bad_pixels(input_dataset, bp_map):
         #Q: Is this operation supported with corgidrp data class?
         data_cube[i] = data_cube[i].filled(0)
 
-    history_msg = "removed bad pixels from cosmic rays and bad pixels"
+    history_msg = "removed pixels affected by cosmic rays and bad pixels"
     data.update_after_processing_step(history_msg, new_all_data=data_cube)
 
     return data
