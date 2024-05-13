@@ -1,5 +1,6 @@
 # A file that holds the functions that transmogrify l2a data to l2b data 
 import numpy as np
+import corgifrp.detector as detector
 
 def add_photon_noise(input_dataset):
     """
@@ -146,23 +147,20 @@ def correct_bad_pixels(input_dataset, bp_map):
 
     data = input_dataset.copy()
     data_cube = data.all_data
+    dq_cube = data.all_dq
 
     for i in range(data_cube.shape[0]):
-        # Load CR map
-        cr_map = 
-        # Combine CR and BP maps
+        # load CR map
+        cr_map = dq_cube[i]
+        # combine CR and BP maps
         bp_cr_mask = np.logical_or(cr_map, bp_map).astype(int)
-        # Update DQ mask for the frame (Bad pixel=3rd bit, CR=8th bit. Bad pixel
-        # and CR=00100001=132)
-        update_dq
-        # remove bad pixels
-        #Q: Can one apply np.ma to data directly (corgidrp class)?
+        # mask affected pixels
         data_cube[i] = np.ma.masked_array(data_cube[i], bp_cr_mask)
-        #Q: Is this operation supported with corgidrp data class?
         data_cube[i] = data_cube[i].filled(0)
 
     history_msg = "removed pixels affected by cosmic rays and bad pixels"
-    data.update_after_processing_step(history_msg, new_all_data=data_cube)
+    data.update_after_processing_step(history_msg, new_all_data=data_cube,
+        dq_cube)
 
     return data
 
