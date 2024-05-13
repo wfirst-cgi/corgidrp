@@ -119,7 +119,7 @@ def flat_division(input_dataset, master_flat):
 
     return None
 
-def correct_bad_pixels(input_dataset, bp_map):
+def correct_bad_pixels(input_dataset, bp_mask):
     """
     
     Correct for bad pixels and pixels affected by CR. 
@@ -135,13 +135,13 @@ def correct_bad_pixels(input_dataset, bp_map):
 
     Args:
         input_dataset (corgidrp.data.Dataset): a dataset of Images (L2a-level)
-        bp_map (corgidrp.data.BadPixelMap): Bad-pixel map flagging all bad pixels
+        bp_mask (corgidrp.data.BadPixelMap): Bad-pixel mask flagging all bad pixels
             in that frame. Must be 0 (good) or 1 (bad) at every pixel.
             NOTE: class. Draft written in badpixels branch. Reviewer: Kevin Ludwick.
 
     Returns:
-        corgidrp.data.Dataset: a version of the input dataset with bad pixels
-        and cosmic rays corrected
+        corgidrp.data.Dataset: a version of the input dataset with bad detector
+        pixels and cosmic rays replaced by 0s
  
     """
 
@@ -150,18 +150,21 @@ def correct_bad_pixels(input_dataset, bp_map):
     dq_cube = data.all_dq
 
     for i in range(data_cube.shape[0]):
-        # load CR map
-        cr_map = dq_cube[i]
-        # combine CR and BP maps
-        bp_cr_mask = np.logical_or(cr_map, bp_map).astype(int)
+        # load CR mask
+        cr_mask = dq_cube[i]
+        # combine CR and BP masks
+        bp_cr_mask = (cr_mask+bp_mask).astype(int)
         # mask affected pixels
-        data_cube[i] = np.ma.masked_array(data_cube[i], bp_cr_mask)
-        breakpoint()
-        data_cube[i] = data_cube[i].filled(0)
+        # Which values do we want the data have at the location of the masked values?
+        arr = np.ma.masked_array(data_cube[i,:,:], bp_cr_mask)
+        data_cube[i,0,0] = np.ma.set_fill_value(arr, fill_value=0)
+        dq_cube[i] = bp_cr_mask
 
     history_msg = "removed pixels affected by cosmic rays and bad pixels"
     data.update_after_processing_step(history_msg, new_all_data=data_cube,
         new_all_dq=dq_cube)
+
+    breakpoint() 
 
     return data
 

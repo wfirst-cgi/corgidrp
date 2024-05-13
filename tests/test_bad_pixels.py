@@ -32,7 +32,11 @@ def test_bad_pixels():
         for i_row in row_bp:
             bp_mask[i_col, i_row] += 4
 
-    correct_bad_pixels(dataset, bp_mask)
+    # One idea is to verify that after the call, CR and vabd detector pixels are
+    # properly combined checking the amount of each of them
+
+    new_dataset = correct_bad_pixels(dataset, bp_mask)
+    breakpoint()
 
 
 if __name__ == '__main__':
