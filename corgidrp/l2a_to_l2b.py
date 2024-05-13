@@ -182,20 +182,21 @@ def desmear(input_dataset):
     data = input_dataset.copy()
     data_cube = data.all_data
 
+    rowreadtime_sec = detector.get_rowreadtime_sec()
+
     for i in range(data_cube.shape[0]):
-        exptime = float(datacube[i].ext_hdr['EXPTIME'])
-        rowreadtime = TBD
+        exptime_sec = float(datacube[i].ext_hdr['EXPTIME'])
         smear = np.zeros_like(data_cube[i])
         m = len(smear)
         for r in range(m):
             columnsum = 0
             for s in range(r+1):
-                columnsum = columnsum + rowreadtime/exptime*((1 
-                + rowreadtime/exptime)**((s+1)-(s+1)-1))*data_cube[i,s,:]
+                columnsum = columnsum + rowreadtime_sec/exptime_sec*((1 
+                + rowreadtime_sec/exptime_sec)**((s+1)-(s+1)-1))*data_cube[i,s,:]
             smear[r,:] = columnsum
         data_cube[i] -= smear
    
-    history_msg = "removed bad pixels from cosmic rays and bad pixels"
+    history_msg = "Data desmeared"
     data.update_after_processing_step(history_msg, new_all_data=data_cube)
 
     return data
