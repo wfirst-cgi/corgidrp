@@ -1,6 +1,6 @@
 # A file that holds the functions that transmogrify l2a data to l2b data 
 import numpy as np
-import corgifrp.detector as detector
+import corgidrp.detector as detector
 
 def add_photon_noise(input_dataset):
     """
@@ -156,11 +156,12 @@ def correct_bad_pixels(input_dataset, bp_map):
         bp_cr_mask = np.logical_or(cr_map, bp_map).astype(int)
         # mask affected pixels
         data_cube[i] = np.ma.masked_array(data_cube[i], bp_cr_mask)
+        breakpoint()
         data_cube[i] = data_cube[i].filled(0)
 
     history_msg = "removed pixels affected by cosmic rays and bad pixels"
     data.update_after_processing_step(history_msg, new_all_data=data_cube,
-        dq_cube)
+        new_all_dq=dq_cube)
 
     return data
 
