@@ -196,7 +196,7 @@ def desmear(input_dataset):
             smear[r,:] = columnsum
         data_cube[i] -= smear
    
-    history_msg = "Data desmeared"
+    history_msg = "Desmear applied to data"
     data.update_after_processing_step(history_msg, new_all_data=data_cube)
 
     return data
