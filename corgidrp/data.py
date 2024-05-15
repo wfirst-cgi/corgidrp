@@ -206,9 +206,11 @@ class Image():
                 elif len(hdulist)>2:
                     self.err = hdulist[2].data
                     self.err_hdr = hdulist[2].header
+                    if self.err.ndim == 2:
+                        self.err = self.err.reshape((1,)+self.err.shape)
                 else:
                     self.err = np.zeros((1,)+self.data.shape)
-
+           
                 if dq is not None:
                     if np.shape(self.data) != np.shape(dq):
                         raise ValueError("The shape of dq is {0} while we are expecting shape {1}".format(dq.shape, self.data.shape))
@@ -296,7 +298,17 @@ class Image():
         if not hasattr(self, 'bias_hdr'):
             self.bias_hdr = fits.Header()
         self.bias_hdr["EXTNAME"] = "BIAS"
-        # can do fancier things here if needed or storing more meta data
+        
+        # discard individual errors if we aren't tracking them but multiple error terms are passed in
+        if not corgidrp.track_individual_errors and self.err.shape[0] > 1:
+            num_errs = self.err.shape[0] - 1
+            # delete keywords specifying the error of each individual slice
+            for i in range(num_errs):
+                del self.err_hdr['Layer_{0}'.format(i + 2)]
+            self.err = self.err[:1] # only save the total err, preserve 3-D shape
+        self.err_hdr['TRK_ERRS'] = corgidrp.track_individual_errors # specify whether we are tracing errors
+
+
 
     # create this field dynamically
     @property
@@ -398,25 +410,31 @@ class Image():
         """
         Add a layer of a specific additive uncertainty on the 3-dim error array extension
         and update the combined uncertainty in the first layer.
-        Update the error header and assign the error name.
+        Update the error header and assign the error name. 
 
+        Only tracks individual errors if the "track_individual_errors" setting is set to True
+        in the configuration file
+        
         Args:
           input_error (np.array): 2-d error layer
           err_name (str): name of the uncertainty layer
         """
         if input_error.ndim != 2 or input_error.shape != self.data.shape:
             raise ValueError("we expect a 2-dimensional error layer with dimensions {0}".format(self.data.shape))
-
-        #append new error as layer on 3D cube
-        self.err=np.append(self.err, [input_error], axis=0)
-
+        
         #first layer is always the updated combined error
         self.err[0,:,:] = np.sqrt(self.err[0,:,:]**2 + input_error**2)
-
-        layer = str(self.err.shape[0])
         self.err_hdr["Layer_1"] = "combined_error"
-        self.err_hdr["Layer_" + layer] = err_name
 
+        if corgidrp.track_individual_errors:
+            #append new error as layer on 3D cube
+            self.err=np.append(self.err, [input_error], axis=0)
+
+            layer = str(self.err.shape[0])
+            self.err_hdr["Layer_" + layer] = err_name    
+        
+        # record history since 2-D error map doesn't track individual terms
+        self.err_hdr['HISTORY'] = "Added error term: {0}".format(err_name)
 
 class Dark(Image):
     """
@@ -535,10 +553,52 @@ class NonLinearityCalibration(Image):
         if 'DATATYPE' not in self.ext_hdr or self.ext_hdr['DATATYPE'] != 'NonLinearityCalibration':
             raise ValueError("File that was loaded was not a NonLinearityCalibration file.")
 
+class BadPixelMap(Image):
+    """
+    Class for bad pixel map. The bad pixel map indicates which pixels are hot
+    pixels and thus unreliable. Note: These bad pixels are bad due to inherent
+    nonidealities in the detector (applicable to any frame taken) and are
+    separate from pixels marked per frame as contaminated by cosmic rays.
+
+     Args:
+        data_or_filepath (str or np.array): either the filepath to the FITS file to read in OR the 2D image data
+        pri_hdr (astropy.io.fits.Header): the primary header (required only if raw 2D data is passed in)
+        ext_hdr (astropy.io.fits.Header): the image extension header (required only if raw 2D data is passed in)
+        input_dataset (corgidrp.data.Dataset): the Image files combined together to make this bad pixel map (required only if raw 2D data is passed in)
+    """
+    def __init__(self, data_or_filepath, pri_hdr=None, ext_hdr=None, input_dataset=None):
+        # run the image class contructor
+        super().__init__(data_or_filepath, pri_hdr=pri_hdr, ext_hdr=ext_hdr)
+
+        # if this is a new bad pixel map, we need to bookkeep it in the header
+        # b/c of logic in the super.__init__, we just need to check this to see if it is a new bad pixel map
+        if ext_hdr is not None:
+            if input_dataset is None:
+                # error check. this is required in this case
+                raise ValueError("This appears to be a new bad pixel map. The dataset of input files needs to be passed in to the input_dataset keyword to record history of this bad pixel map.")
+            self.ext_hdr['DATATYPE'] = 'BadPixelMap' # corgidrp specific keyword for saving to disk
+
+            # log all the data that went into making this bad pixel map
+            self._record_parent_filenames(input_dataset)
+
+            # add to history
+            self.ext_hdr['HISTORY'] = "Bad Pixel map created"
+
+            # give it a default filename using the first input file as the base
+            # strip off everything starting at .fits
+            orig_input_filename = input_dataset[0].filename.split(".fits")[0]
+            self.filename = "{0}_bad_pixel_map.fits".format(orig_input_filename)
+
+
+        # double check that this is actually a bad pixel map that got read in
+        # since if only a filepath was passed in, any file could have been read in
+        if 'DATATYPE' not in self.ext_hdr or self.ext_hdr['DATATYPE'] != 'BadPixelMap':
+            raise ValueError("File that was loaded was not a BadPixelMap file.")
 
 datatypes = { "Image" : Image,
               "Dark"  : Dark,
-              "NonLinearityCalibration" : NonLinearityCalibration }
+              "NonLinearityCalibration" : NonLinearityCalibration,
+              "BadPixelMap" : BadPixelMap }
 
 def autoload(filepath):
     """
