@@ -154,10 +154,9 @@ def correct_bad_pixels(input_dataset, bp_mask):
         cr_mask = dq_cube[i]
         # combine CR and BP masks
         bp_cr_mask = (cr_mask+bp_mask).astype(int)
-        # mask affected pixels
-        # Which values do we want the data have at the location of the masked values?
-        arr = np.ma.masked_array(data_cube[i,:,:], bp_cr_mask)
-        data_cube[i,0,0] = np.ma.set_fill_value(arr, fill_value=0)
+        # mask affected pixels with NaN (if L2a are float type)
+        bp = np.where(bp_cr_mask != 0)
+        data_cube[i, bp[0], bp[1]] = 0
         dq_cube[i] = bp_cr_mask
 
     history_msg = "removed pixels affected by cosmic rays and bad pixels"
