@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from corgidrp.data import Image, Dataset
+from corgidrp.data import Image, Dataset, BadPixelMap
 from corgidrp.l2a_to_l2b import correct_bad_pixels
 import pytest
 from corgidrp.data import Dataset
@@ -24,7 +24,8 @@ def test_bad_pixels():
 
     # Generate bad pixel detector mask
     dq_mask = Dataset(fpaths).all_dq 
-    bp_mask = dq_mask[0,:,:]
+    bp_mask = BadPixelMap(dq_mask[0,:,:])
+    
     # Add some Bad Detector Pixels
     col_bp = [12, 120, 234, 450, 678, 990]
     row_bp = [546, 89, 123, 243, 447, 675]

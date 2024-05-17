@@ -137,7 +137,6 @@ def correct_bad_pixels(input_dataset, bp_mask):
         input_dataset (corgidrp.data.Dataset): a dataset of Images (L2a-level)
         bp_mask (corgidrp.data.BadPixelMap): Bad-pixel mask flagging all bad pixels
             in that frame. Must be 0 (good) or 1 (bad) at every pixel.
-            NOTE: class. Draft written in badpixels branch. Reviewer: Kevin Ludwick.
 
     Returns:
         corgidrp.data.Dataset: a version of the input dataset with bad detector
