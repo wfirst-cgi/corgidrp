@@ -130,6 +130,7 @@ def test_nonlin_cal_e2e(
     # Define the raw science data to process
     nonlin_l1_list = glob.glob(os.path.join(nonlin_l1_datadir, "*.fits"))
     nonlin_l1_list.sort()
+    
 
     # Set TVAC OBSTYPE to MNFRAME/NONLIN (flight data should have these values)
     set_obstype_for_tvac(nonlin_l1_list)
@@ -144,7 +145,7 @@ def test_nonlin_cal_e2e(
     nonlin_dat = np.genfromtxt(os.path.join(tvac_caldir,nonlin_table_from_eng),
         delimiter=",")
     pri_hdr, ext_hdr = mocks.create_default_headers()
-    ext_hdr["DRPCTIME"] = time.Time.now().isot
+    ext_hdr['DRPCTIME'] = time.Time.now().isot
     ext_hdr['DRPVERSN'] =  corgidrp.__version__
     mock_input_dataset = data.Dataset(nonlin_l1_list)
     nonlinear_cal = data.NonLinearityCalibration(nonlin_dat,
