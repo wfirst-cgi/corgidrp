@@ -271,7 +271,6 @@ def create_simflat_dataset(filedir=None, numfiles=10):
     dataset = data.Dataset(frames)
     return dataset
 
-
 def create_raster(mask,data,dither_sizex=None,dither_sizey=None,row_cent = None,col_cent = None,n_dith=None,mask_size=420,snr=250,planet=None, band=None, radius=None, snr_constant=None):
     """Performs raster scan of Neptune or Uranus images
     
@@ -642,11 +641,27 @@ def create_default_headers(arrtype="SCI", vistype="TDEMO"):
         NAXIS2 = 2200
 
     # fill in prihdr
+    prihdr['AUXFILE'] = 'mock_auxfile.fits'
     prihdr['OBSID'] = 0
     prihdr['BUILD'] = 0
     # prihdr['OBSTYPE'] = arrtype
     prihdr['VISTYPE'] = vistype
     prihdr['MOCK'] = True
+    prihdr['TELESCOP'] = 'ROMAN'
+    prihdr['INSTRUME'] = 'CGI'
+    prihdr['OBSNAME'] = 'MOCK'
+    prihdr['TARGET'] = 'MOCK'
+    prihdr['OBSNUM'] = '000'
+    prihdr['CAMPAIGN'] = '000'
+    prihdr['PROGNUM'] = '00000'
+    prihdr['SEGMENT'] = '000'
+    prihdr['VISNUM'] = '000'
+    prihdr['EXECNUM'] = '00'
+    prihdr['VISITID'] = prihdr['PROGNUM'] + prihdr['EXECNUM'] + prihdr['CAMPAIGN'] + prihdr['SEGMENT'] + prihdr['OBSNUM'] + prihdr['VISNUM']
+    prihdr['PSFREF'] = False
+    prihdr['SIMPLE'] = True
+    prihdr['NAXIS'] = 0
+        
 
     # fill in exthdr
     exthdr['NAXIS'] = 2
@@ -694,6 +709,7 @@ def create_default_headers(arrtype="SCI", vistype="TDEMO"):
     exthdr['MISSING'] = False
 
     return prihdr, exthdr
+
 def create_badpixelmap_files(filedir=None, col_bp=None, row_bp=None):
     """
     Create simulated bad pixel map data. Code value is 4.
@@ -1857,3 +1873,202 @@ def generate_mock_pump_trap_data(output_dir,meta_path, EMgain=10,
                         hdul.writeto(str(filename)[:-4]+'_'+str(mult_counter)+'.fits', overwrite = True)
                 else:
                     hdul.writeto(filename, overwrite = True)
+
+default_wcs_string = """WCSAXES =                    2 / Number of coordinate axes                      
+CRPIX1  =                  0.0 / Pixel coordinate of reference point            
+CRPIX2  =                  0.0 / Pixel coordinate of reference point            
+CDELT1  =                  1.0 / Coordinate increment at reference point        
+CDELT2  =                  1.0 / Coordinate increment at reference point        
+CRVAL1  =                  0.0 / Coordinate value at reference point            
+CRVAL2  =                  0.0 / Coordinate value at reference point            
+LATPOLE =                 90.0 / [deg] Native latitude of celestial pole        
+MJDREF  =                  0.0 / [d] MJD of fiducial time
+"""
+
+def gaussian_array(array_shape=[50,50],sigma=2.5,amp=1.,xoffset=0.,yoffset=0.):
+    """Generate a 2D square array with a centered gaussian surface (for mock PSF data).
+
+    Args:
+        array_shape (int, optional): Shape of desired array in pixels. Defaults to [50,50].
+        sigma (float, optional): Standard deviation of the gaussian curve, in pixels. Defaults to 5.
+        amp (float,optional): Amplitude of gaussian curve. Defaults to 1.
+        xoffset (float,optional): x offset of gaussian from array center. Defaults to 0.
+        yoffset (float,optional): y offset of gaussian from array center. Defaults to 0.
+        
+    Returns:
+        np.array: 2D array of a gaussian surface.
+    """
+    x, y = np.meshgrid(np.linspace(-array_shape[0]/2, array_shape[0]/2, array_shape[0]),
+                        np.linspace(-array_shape[1]/2, array_shape[1]/2, array_shape[1]))
+    dst = np.sqrt((x-xoffset)**2+(y-yoffset)**2)
+
+    # lower normal part of gaussian
+    normal = 1/(2.0 * np.pi * sigma**2)
+
+    # Calculating Gaussian filter
+    gauss = np.exp(-((dst)**2 / (2.0 * sigma**2))) * normal * amp
+    
+    return gauss
+
+def create_psfsub_dataset(n_sci,n_ref,roll_angles,darkhole_scifiles=None,darkhole_reffiles=None,
+                          wcs_header = None,
+                          data_shape = [60,60],
+                          centerxy = None,
+                          outdir = None):
+    """Generate a mock science and reference dataset ready for the PSF subtraction step.
+    TODO: reference a central pixscale number, rather than hard code.
+
+    Args:
+        n_sci (int): number of science frames, must be >= 1.
+        n_ref (int): nummber of reference frames, must be >= 0.
+        roll_angles (list-like): list of the roll angles of each science and reference 
+            frame, with the science frames listed first. 
+        darkhole_scifiles (list of str, optional): Filepaths to the darkhole science frames. If not provided, 
+            a noisy 2D gaussian will be used instead. Defaults to None.
+        darkhole_reffiles (list of str, optional): Filepaths to the darkhole reference frames. If not provided, 
+            a noisy 2D gaussian will be used instead. Defaults to None.
+        wcs_header (astropy.fits.Header, optional): Fits header object containing WCS information. If not provided, 
+            a mock header will be created. Defaults to None.
+        data_shape (list-like): desired shape of data array. Must have length 2. Defaults to [1024,1024].
+        outdir (str, optional): Desired output directory. If not provided, data will not be saved. Defaults to None.
+
+    Returns:
+        tuple: corgiDRP science Dataset object and reference Dataset object.
+    """
+
+    assert len(data_shape) == 2
+    
+    if roll_angles is None:
+        roll_angles = [0.] * (n_sci+n_ref)
+
+    # mask_center = np.array(data_shape)/2
+    # star_pos = mask_center
+    pixscale = 0.0218 # arcsec
+
+    # Build each science/reference frame
+    sci_frames = []
+    ref_frames = []
+    for i in range(n_sci+n_ref):
+
+        # Create default headers
+        prihdr, exthdr = create_default_headers()
+        
+        # Read in darkhole data, if provided
+        if i<n_sci and not darkhole_scifiles is None:
+            fpath = darkhole_scifiles[i]
+            _,fname = os.path.split(fpath)
+            darkhole = fits.getdata(fpath)
+            
+            fill_value = np.nanmin(darkhole)
+            img_data = np.full(data_shape,fill_value)
+
+            # Overwrite center of array with the darkhole data
+            cr_psf_pix = np.array(darkhole.shape) / 2 - 0.5
+            if centerxy is None:
+                full_arr_center = np.array(img_data.shape) // 2 
+            else:
+                full_arr_center = (centerxy[1],centerxy[0])
+            start_psf_ind = full_arr_center - np.array(darkhole.shape) // 2
+            img_data[start_psf_ind[0]:start_psf_ind[0]+darkhole.shape[0],start_psf_ind[1]:start_psf_ind[1]+darkhole.shape[1]] = darkhole
+            psfcenty, psfcentx = cr_psf_pix + start_psf_ind
+        
+        elif i>=n_sci and not darkhole_reffiles is None:
+            fpath = darkhole_reffiles[i-n_sci]
+            _,fname = os.path.split(fpath)
+            darkhole = fits.getdata(fpath)
+            fill_value = np.nanmin(darkhole)
+            img_data = np.full(data_shape,fill_value)
+
+            # Overwrite center of array with the darkhole data
+            cr_psf_pix = np.array(darkhole.shape) / 2 - 0.5
+            if centerxy is None:
+                full_arr_center = np.array(img_data.shape) // 2 
+            else:
+                full_arr_center = (centerxy[1],centerxy[0])
+            start_psf_ind = full_arr_center - np.array(darkhole.shape) // 2
+            img_data[start_psf_ind[0]:start_psf_ind[0]+darkhole.shape[0],start_psf_ind[1]:start_psf_ind[1]+darkhole.shape[1]] = darkhole
+            psfcenty, psfcentx = cr_psf_pix + start_psf_ind
+
+        # Otherwise generate a 2D gaussian for a fake PSF
+        else:
+            label = 'ref' if i>= n_sci else 'sci'
+            fname = f'MOCK_{label}_roll{roll_angles[i]}.fits'
+            arr_center = np.array(data_shape) / 2 - 0.5
+            if centerxy is None:
+                psfcenty,psfcentx = arr_center
+            else:
+                psfcentx,psfcenty = centerxy
+            
+            psf_off_xy = (psfcentx-arr_center[1],psfcenty-arr_center[0])
+            img_data = gaussian_array(array_shape=data_shape,
+                                      xoffset=psf_off_xy[0],
+                                      yoffset=psf_off_xy[1])
+            
+            # Add some noise
+            rng = np.random.default_rng(seed=None)
+            noise = rng.normal(0,1e-11,img_data.shape)
+            img_data += noise
+
+            # Add fake planet to sci files
+            if i<n_sci:
+                pa_deg = -roll_angles[i]
+                sep_pix = 10
+                xoff,yoff = sep_pix * np.array([-np.sin(np.radians(pa_deg)),np.cos(np.radians(pa_deg))])
+                planet_psf = gaussian_array(array_shape=data_shape,
+                                            amp=1e-6,
+                                            xoffset=xoff+psf_off_xy[0],
+                                            yoffset=yoff+psf_off_xy[1])
+                img_data += planet_psf
+        
+
+        # Add necessary header keys
+        prihdr['TELESCOP'] = 'ROMAN'
+        prihdr['INSTRUME'] = 'CGI'
+        prihdr['XOFFSET'] = 0.0
+        prihdr['YOFFSET'] = 0.0
+        prihdr['FILENAME'] = fname
+        prihdr["MODE"] = 'HLC'
+        prihdr["BAND"] = 1
+
+        exthdr['BUNIT'] = 'MJy/sr'
+        exthdr['MASKLOCX'] = psfcentx
+        exthdr['MASKLOCY'] = psfcenty
+        exthdr['STARLOCX'] = psfcentx
+        exthdr['STARLOCY'] = psfcenty
+        exthdr['PIXSCALE'] = pixscale
+        exthdr["ROLL"] = roll_angles[i]
+        exthdr["HIERARCH DATA_LEVEL"] = 'L3'
+        #exthdr["HISTORY"] = "" # This line keeps triggering an "illegal value" error
+
+        # Add WCS header info, if provided
+        if wcs_header is None:
+            wcs_header = fits.header.Header.fromstring(default_wcs_string,sep='\n')
+            # wcs_header._cards = wcs_header._cards[-1]
+        exthdr.extend(wcs_header)
+
+        # Make a corgiDRP Image frame
+        frame = data.Image(img_data, pri_hdr=prihdr, ext_hdr=exthdr)
+
+        # Add it to the correct dataset
+        if i < n_sci:
+            sci_frames.append(frame)
+        else:
+            ref_frames.append(frame)
+
+    sci_dataset = data.Dataset(sci_frames)
+
+    if len(ref_frames) > 0:
+        ref_dataset = data.Dataset(ref_frames)
+    else:
+        ref_dataset = None
+
+    # Save datasets if outdir was provided
+    if not outdir is None:
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+            
+        sci_dataset.save(filedir=outdir, filenames=['mock_psfsub_L2b_sci_input_dataset.fits'])
+        if len(ref_frames) > 0:
+            ref_dataset.save(filedir=outdir, filenames=['mock_psfsub_L2b_ref_input_dataset.fits'])
+
+    return sci_dataset,ref_dataset
