@@ -437,6 +437,82 @@ def match_sources(image, sources, field_path, comparison_threshold=50, rad=0.007
 
     return matched_image_to_field
 
+def fit_astrom_solution(params):
+    '''
+    Function used to fit the legendre polynomials for distortion mapping. Cannot be used outside of compute_distortion() function where most
+        hard-coded variables are defined.
+
+    Args:
+        params (list): List of the x and y legendre polynomial coefficients
+
+    Returns:
+        residuals (list): List of residuals between true and measured star positions
+    '''
+
+    platescale, rotangle = the_platescale, the_rotangle
+
+    leg_params_x = np.array(params[:fitparams])  
+    leg_params_x = leg_params_x.reshape(fitorder+1, fitorder+1)
+
+    leg_params_y = np.array(params[fitparams:]) 
+    leg_params_y = leg_params_y.reshape(fitorder+1, fitorder+1)
+
+    total_orders = np.arange(fitorder+1)[:,None] + np.arange(fitorder+1)[None,:] 
+
+    leg_params_x = leg_params_x / 500**(total_orders)  
+    leg_params_y = leg_params_y / 500**(total_orders)
+
+    residuals = []
+
+    for i, (pos1, meas_offset, sky_offset, meas_errs) in enumerate(zip(first_stars, offsets, true_offsets, errs)):
+ 
+        binary_offsets = np.array([meas_offset[0], meas_offset[1]]).T
+        star1_pos = np.array([pos1[0], pos1[1]]).T
+        
+        # recenter to detector center
+        star1_pos[:,0] -= x0
+        star1_pos[:,1] -= y0
+
+        # derive star2 position
+        star2_pos = star1_pos + binary_offsets
+
+        # undistort x and y for both star positions
+        star1_pos_corr = np.copy(star1_pos)
+        star1_pos_corr[:,0] = np.polynomial.legendre.legval2d(star1_pos[:,0], star1_pos[:,1], leg_params_x)
+        star1_pos_corr[:,1] = np.polynomial.legendre.legval2d(star1_pos[:,0], star1_pos[:,1], leg_params_y)
+
+        star2_pos_corr = np.copy(star2_pos)
+        star2_pos_corr[:,0] = np.polynomial.legendre.legval2d(star2_pos[:,0], star2_pos[:,1], leg_params_x)
+        star2_pos_corr[:,1] = np.polynomial.legendre.legval2d(star2_pos[:,0], star2_pos[:,1], leg_params_y)
+
+        # translate offsets from [mas] sep, pa to [pixel] sep, pa
+        sky_sep = sky_offset[0]
+        sky_pa = sky_offset[1]
+        
+        true_offset_sep = sky_sep / platescale
+        true_offset_pa = sky_pa + rotangle
+
+        # translate star_pos_corr from x, y to sep, pa
+        corr_offset_x = star2_pos_corr[:,0] - star1_pos_corr[:,0]
+        corr_offset_y = star2_pos_corr[:,1] - star1_pos_corr[:,1]
+        
+        corr_offset_sep = np.sqrt(corr_offset_x**2 + corr_offset_y**2)
+        corr_offset_pa = np.degrees(np.arctan2(-corr_offset_x, corr_offset_y))
+        # ensuring the position angle is always positive
+        for i, pa in enumerate(corr_offset_pa):
+            if pa < 0:
+                corr_offset_pa[i] += 360
+
+        res_sep = corr_offset_sep - true_offset_sep
+        res_pa = corr_offset_pa - true_offset_pa
+        
+        res_sep /= meas_errs[0]
+        res_pa /= meas_errs[1]
+        
+        residuals = np.append(residuals, np.array([res_sep, res_pa]).ravel())
+
+    return residuals
+
 def compute_platescale_and_northangle(image, source_info, center_coord, center_radius=0.9):
     """
     Used to find the platescale and north angle of the image. Calculates the platescale for each pair of stars in the image
@@ -507,7 +583,7 @@ def compute_platescale_and_northangle(image, source_info, center_coord, center_r
         xguess = star2['x'] - star1['x']
         yguess = star2['y'] - star1['y']
         
-        xoff, yoff = measure_offset(image, xstar_guess=star1['x'], ystar_guess=star2['x'], xoffset_guess= xguess, yoffset_guess= yguess)
+        xoff, yoff = measure_offset(image, xstar_guess=star1['x'], ystar_guess=star1['y'], xoffset_guess= xguess, yoffset_guess= yguess)
 
         pixsep = np.sqrt(np.power(xoff,2) + np.power(yoff,2))
         pixseps[i] = pixsep
@@ -649,14 +725,128 @@ def compute_boresight(image, source_info, target_coordinate, cal_properties):
 
     return image_center_RA, image_center_DEC
 
-def boresight_calibration(input_dataset, field_path='JWST_CALFIELD2020.csv', field_matches=None, find_threshold=10, fwhm=7, mask_rad=1, comparison_threshold=50, search_rad=0.0075, platescale_guess=21.8, platescale_tol=0.1, center_radius=0.9, frames_to_combine=None):
+def format_distortion_inputs(input_dataset, source_matches, position_error=None):
+    ''' Function that formats the input data for the distortion map computation * must be run before compute_distortion *
+    
+    Args:
+        input_dataset (corgidrp.data.dataset): corgidrp dataset object with images to compute the distortion from
+        source_matches (list of astropy.table.Table() objects): List of length N for N frames in the input dataset. Tables must columns 'x','y','RA','DEC' as pixel locations and corresponding sky positons
+        position_error (NoneType or int): If int, this is the uniform error value assumed for the offset between pairs of stars in both x and y
+                        Should be changed later to accept non-uniform errors
+        
+    Returns:
+        first_stars (np.array): 2D array of the (x, y) pixel positions for the first star in every star pair
+        offsets (np.array): 2D array of the (delta_x, delta_y) values for each star from the first star position
+        true_offsets (np.array): 2D array of the (delta_ra, delta_dec) offsets between the matched stars in the reference field
+        errs (np.array): 2D array of the (x_err, y_err) error in the measured pixel positions
+    '''
+    ## Create arrays to store values in
+    dxs, dys = np.array([]), np.array([])
+    xerrs, yerrs = np.array([]), np.array([])
+    firstxs, firstys = np.array([]), np.array([])
+    seps, pas = np.array([]), np.array([])
+
+    ## Loop over every frame in the dataset
+    for frame_ind in range(len(input_dataset)):
+        input_image = input_dataset[frame_ind].data
+
+        # create all possible combinations of the given stars
+        combo_list = np.array(list(compute_combinations(source_matches[frame_ind])))
+        skycoords = SkyCoord(ra= source_matches[frame_ind]['RA'], dec= source_matches[frame_ind]['DEC'], unit='deg', frame='icrs')
+    
+        for pair_ind in combo_list:
+            # get the pixel offset
+            first = pair_ind[0]
+            second = pair_ind[1]
+            
+            star1 = source_matches[frame_ind][first][['x','y']]
+            star2 = source_matches[frame_ind][second][['x','y']]
+    
+            x_guess = star2[0] - star1[0]
+            y_guess = star2[1] - star1[1]
+        
+            (dx, dy), (data, model, residual), (xfit_err, yfit_err, _), (x1, y1) = measure_offset(input_image, star1[0], star1[1], x_guess, y_guess, guessflux=1)
+    
+            # get the true sky offset [mas]
+            true1 = skycoords[first]
+            true2 = skycoords[second]
+        
+            # get true sky separation and position angle
+            true_sep = true1.separation(true2).mas
+            true_pa = true1.position_angle(true2).deg
+            
+            dxs = np.append(dxs, dx)
+            dys = np.append(dys, dy)
+            firstxs = np.append(firstxs, star1['x'])
+            firstys = np.append(firstys, star1['y'])
+            seps = np.append(seps, true_sep)
+            pas = np.append(pas, true_pa)
+    
+            if type(position_error) == type(None):
+                xerrs = np.append(xerrs, xfit_err)
+                yerrs = np.append(yerrs, yfit_err)
+            else:
+                xerrs = np.append(xerrs, position_error)
+                yerrs = np.append(yerrs, position_error)
+   
+    # join arrays and reshape to (1, 2, N)
+    offsets = np.array([[dxs, dys]])
+    first_stars = np.array([[firstxs, firstys]])
+    true_offsets = np.array([[seps, pas]])
+    errs = np.array([[xerrs, yerrs]])
+
+    return first_stars, offsets, true_offsets, errs
+
+def compute_distortion(input_dataset, first_stars, offsets, true_offsets, errs, platescale, northangle, fitorder=3):
+    ''' 
+    Function that computes the legendre polynomial coefficients that describe the image distortion map * must run format_disotrtio_inputs() first *
+
+    Args:
+        input_dataset (corgidrp.data.Dataset): corgidrp dataset object with images to compute the distortion from
+        first_stars (np.array): 2D array of the (x, y) pixel positions for the first star in every star pair
+        offsets (np.array): 2D array of the (delta_x, delta_y) values for each star from the first star position
+        true_offsets (np.array): 2D array of the (delta_ra, delta_dec) offsets between the matched stars in the reference field
+        errs (np.array): 2D array of the (x_err, y_err) error in the measured pixel positions
+        platescale (float): Platescale value to use in computing distortion
+        northangle (float): Northangle value to use in computing distortion 
+        fitorder (int): The order of legendre polynomial to fit to the image distortion (default: 3)
+
+    Returns:
+        distortion_coeffs (tuple): The legendre coefficients (np.array) and polynomial order used for the fit (int)
+
+    '''
+
+    ## SET FITTING PARAMS
+    # center around image center
+    # assume all images in dataset have the same shape
+    input_image = input_dataset[0].data
+    x0 = np.shape(input_image)[1] // 2
+    y0 = np.shape(input_image)[0] // 2
+    
+    # define fitting params            
+    fitparams = (fitorder + 1)**2
+    the_platescale = platescale
+    the_rotangle = northangle
+    
+    # initial guesses for the legendre coeffs
+    guess_leg = [0 for _ in range(fitorder+1)] + [500,] + [0 for _ in range(fitparams - fitorder - 2)] + [0,500] + [0 for _ in range(fitparams-2)]
+    
+    ## OPTIMIZE 
+    (distortion_coeffs, _) = optimize.leastsq(fit_astrom_solution, guess_leg)
+
+    return (distortion_coeffs, fitorder)
+  
+  
+def boresight_calibration(input_dataset, field_path='JWST_CALFIELD2020.csv', field_matches=None, find_threshold=10, fwhm=7, mask_rad=1, 
+                          comparison_threshold=50, search_rad=0.0075, platescale_guess=21.8, platescale_tol=0.1, center_radius=0.9, 
+                          frames_to_combine=None, find_distortion=True, fitorder=3, position_error=None):
     """
     Perform the boresight calibration of a dataset.
     
     Args:
         input_dataset (corgidrp.data.Dataset): Dataset containing a images for astrometric calibration
         field_path (str): Full path to file with search field data (ra, dec, vmag, etc.) (default: 'JWST_CALFIELD2020.csv')
-        field_matches (str): Full path to file with calibration field matches to the image sources (x, y, ra, dec), if None, automated source matching is used (default: None)
+        field_matches (list of str): List of full paths to files with calibration field matches for each image in the dataset (x, y, ra, dec), if None, automated source matching is used (default: None)
         find_threshold (int): Number of stars to find (default 10)
         fwhm (float): Full width at half maximum of the stellar psf (default: 7, ~fwhm for a normal distribution with sigma=3)
         mask_rad (int): Radius of mask for stars [in fwhm] (default: 1)
@@ -666,6 +856,9 @@ def boresight_calibration(input_dataset, field_path='JWST_CALFIELD2020.csv', fie
         platescale_tol (float): A tolerance for finding source matches within a fraction of the initial plate scale guess (default: 0.1)
         center_radius (float): Percent of the image to compute plate scale and north angle from, centered around the image center (default: 0.9 -- ie: 90% of the image is used)
         frames_to_combine (int): The number of frames to combine in a dataset (default: None)
+        find_distortion (boolean): Used to determine if distortion map coeffs will be computed (default: True)
+        fitorder (int): The order of legendre polynomials used to fit the distortion map (default: 3)
+        position_error (NoneType or int): If int, this is the uniform error value assumed for the offset between pairs of stars in both x and y
 
     Returns:
         corgidrp.data.AstrometricCalibration: Astrometric Calibration data object containing image center coords in (RA,DEC), platescale, and north angle
@@ -675,9 +868,12 @@ def boresight_calibration(input_dataset, field_path='JWST_CALFIELD2020.csv', fie
     dataset = input_dataset.copy()
 
     # load in the source matches if automated source finder is not being used
+    matched_sources_multiframe = []
     if field_matches is not None:
-        matched_sources = ascii.read(field_matches)
-
+        for i in range(len(input_dataset)):
+            matched_sources = ascii.read(field_matches[i])
+            matched_sources_multiframe.append(matched_sources)
+        
     # load in field data to refer to
     if field_path == 'JWST_CALFIELD2020.csv':
         full_field_path = os.path.join(os.path.dirname(__file__), "data", field_path)
@@ -719,6 +915,7 @@ def boresight_calibration(input_dataset, field_path='JWST_CALFIELD2020.csv', fie
         if field_matches is None:
             found_sources = find_source_locations(image, threshold=find_threshold, fwhm=fwhm, mask_rad=mask_rad)
             matched_sources = match_sources(dataset[i], found_sources, field_path, comparison_threshold=comparison_threshold, rad=search_rad, platescale_guess=platescale_guess, platescale_tol=platescale_tol)
+            matched_sources_multiframe.append(matched_sources)
 
         # compute the calibration properties
         cal_properties = compute_platescale_and_northangle(image, source_info=matched_sources, center_coord=target_coordinate, center_radius=center_radius)
@@ -735,13 +932,22 @@ def boresight_calibration(input_dataset, field_path='JWST_CALFIELD2020.csv', fie
     avg_platescale = np.mean([astro.platescale for astro in astroms])
     avg_northangle = np.mean([astro.northangle for astro in astroms])
 
-    avg_data = np.array([avg_ra, avg_dec, avg_platescale, avg_northangle])
+    # compute the distortion map coeffs
+    if find_distortion:
+        first_stars, offsets, true_offsets, errs = format_distortion_inputs(input_dataset, matched_sources_multiframe, position_error=position_error)
+        distortion_coeffs = compute_distortion(input_dataset, first_stars, offsets, true_offsets, errs, platescale=avg_platescale, northangle=avg_northangle, fitorder=fitorder)
+    else:
+        distortion_coeffs = np.nan
+
+    astromcal_data = [np.array([avg_ra, avg_dec]), avg_platescale, avg_northangle, distortion_coeffs]
     astroms_dataset = corgidrp.data.Dataset(astroms)
-    avg_cal = corgidrp.data.AstrometricCalibration(avg_data, pri_hdr=input_dataset[0].pri_hdr, ext_hdr=input_dataset[0].ext_hdr, input_dataset=astroms_dataset)
+    avg_cal = corgidrp.data.AstrometricCalibration(astromcal_data, pri_hdr=input_dataset[0].pri_hdr, ext_hdr=input_dataset[0].ext_hdr, input_dataset=astroms_dataset)
         
     # update the history
     history_msg = "Boresight calibration completed"
     astrom_cal_dataset = corgidrp.data.Dataset([avg_cal])
     astrom_cal_dataset.update_after_processing_step(history_msg)
+    ## history message should be added to the input dataset(?)
+    input_dataset.update_after_processing_step(history_msg)
 
-    return astrom_cal
+    return avg_cal
